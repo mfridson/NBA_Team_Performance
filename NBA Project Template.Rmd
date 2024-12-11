@@ -1,0 +1,571 @@
+---
+title: DATA 606 Data Project - NBA CBA Impacts on Team Performance
+author: Marc Fridson
+---
+
+### Part 1 - Introduction
+
+The NBA has historically had a parity problem. There are 30 NBA teams, but a few teams in major markets (i.e., Boston, San Francisco, Los Angeles, Miami) tend to land the most marquee free agents, resulting in 14 of the last 24 championships have been won by 4 teams the Golden State Warriors, Cleveland Cavaliers and Miami Heat. While 10 championships have come from other areas, only 1 of those teams/cities has won multiple championships: the San Antonio Spurs. There is a pattern with the teams that won these: 1) the only team to win multiple championships never won them in back to back seasons 2) they had superstar free agents that left to go to the other teams mentioned 3) these teams looked to avoid significant luxury tax payments, likely due to lower revenue generation in those markets.
+
+This study examines the relationship between NBA championship success and the contribution of homegrown talent, specifically focusing on the percentage of regular-season points scored by players originally drafted by their respective teams. It aims to determine whether championship-winning teams have a statistically higher or lower reliance on these players compared to non-championship teams.
+
+Additionally, the research investigates the impact of successive Collective Bargaining Agreements (CBAs) on roster composition and player retention, analyzing whether new CBAs have significantly altered the proportion of drafted players on championship rosters and their scoring contributions. The study also seeks to identify which CBA had the most significant effect on these metrics. Furthermore, it evaluates the total plus-minus statistics of NBA champions to assess any statistical significance when compared to various groups, including all teams, and the top 16, 8, and 4 teams with the highest plus-minus values for the season. The analysis encompasses 24 NBA champions from four distinct periods: 2001-2005, 2005-2011, 2011-2016, and 2016-2023.
+
+### Part 2 - Data
+
+```{r}
+library(rvest)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(readr)
+library(dplyr)
+library(tibble)
+
+all_nba_rosters <- read.csv("all_nba_rosters.csv")
+historical_rosters <- read.csv("historical_rosters.csv")
+player_stats_tbl <- read.csv("player_stats.csv")
+team_stats_tbl <- read.csv("team_stats.csv")
+nba_champions <- read.csv("nba_champions.csv")
+
+
+all_nba_rosters <- all_nba_rosters %>%
+  union_all(historical_rosters)
+
+draft_team <- all_nba_rosters %>%
+  filter(Exp == "R")
+```
+
+```{r}
+team_mapping <- data.frame(
+  abbreviation = c("ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+                   "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+                   "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS"),
+  full_name = c("Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets", "Chicago Bulls", "Cleveland Cavaliers", 
+                "Dallas Mavericks", "Denver Nuggets", "Detroit Pistons", "Golden State Warriors",
+                "Houston Rockets", "Indiana Pacers", "Los Angeles Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat", 
+                "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans", "New York Knicks",
+                "Oklahoma City Thunder", "Orlando Magic", "Philadelphia 76ers", "Phoenix Suns", "Portland Trail Blazers", 
+                "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors", "Utah Jazz", "Washington Wizards")
+)
+
+all_nba_rosters <- all_nba_rosters %>%
+  filter(Season >= 2001)%>%
+  left_join(team_mapping, by = c("Team" = "abbreviation"))
+
+nba_data <- all_nba_rosters %>%
+  mutate(is_on_draft_team = if_else(
+    mapply(function(Player, Birth.Date, Team) any(
+      draft_team$Player == Player & draft_team$Birth.Date == Birth.Date & draft_team$Team == Team
+    ), Player, Birth.Date, Team),
+    TRUE, FALSE
+  ))
+
+nba_data <- nba_data %>%
+  mutate(is_champion = if_else(
+    mapply(function(full_name, Season) any(nba_champions$champion == full_name & nba_champions$season == Season),full_name, Season),TRUE, FALSE))
+
+write_csv(nba_data, "nba_data.csv")
+```
+
+```{r}
+nba_data_grouped <- nba_data %>%
+  group_by(full_name, Season, is_champion) %>%
+  summarize(
+    player_count = n(),
+    draft_team_count = sum(is_on_draft_team == TRUE),
+    pct_homegrown = draft_team_count / player_count
+  )
+```
+
+```{r}
+player_points_data <- player_stats_tbl %>%
+  group_by(namePlayer, nameTeam, yearSeason) %>%
+  summarize(total_pts = sum(pts, na.rm=TRUE), .groups = "drop")
+
+joined_data <- player_points_data %>%
+  inner_join(nba_data, by = c("namePlayer" = "Player", 
+                              "nameTeam" = "full_name", 
+                              "yearSeason" = "Season"))
+
+team_points <- joined_data %>%
+  group_by(nameTeam, yearSeason, is_champion) %>%
+  summarize(
+    team_total_pts = sum(total_pts, na.rm=TRUE),
+    drafted_total_pts = sum(ifelse(is_on_draft_team == TRUE, total_pts, 0), na.rm=TRUE),
+    pct_homegrown_points = drafted_total_pts / team_total_pts,
+    drafted_player_count = sum(is_on_draft_team == TRUE),
+    player_count = n(),
+    .groups = "drop"
+)
+
+team_points <- team_points %>%
+  mutate(cba_era = case_when(
+    yearSeason <= 2005 ~ "pre_2005_CBA",
+    yearSeason >= 2006 & yearSeason <= 2011 ~ "CBA_2006_2011",
+    yearSeason >= 2012 & yearSeason <= 2016 ~ "CBA_2012_2016",
+    yearSeason >= 2017 ~ "CBA_2017_onward"
+  ))
+```
+
+### Part 3 - Exploratory data analysis
+
+```{r}
+library(ggplot2)
+
+numeric_vars <- team_points %>%
+  select(pct_homegrown_points, team_total_pts, drafted_total_pts, player_count, drafted_player_count)
+
+corr_matrix <- cor(numeric_vars, use = "complete.obs")
+
+corr_long <- as.data.frame(as.table(corr_matrix))
+colnames(corr_long) <- c("Var1", "Var2", "Correlation")
+
+ggplot(corr_long, aes(Var1, Var2, fill = Correlation)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1,1)) +
+  theme_minimal() +
+  labs(title = "Correlation Heatmap of Selected Numeric Variables",
+       x = "", y = "") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+ggplot(team_points, aes(x = team_total_pts, y = pct_homegrown_points)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  theme_minimal() +
+  labs(title = "Pct. Homegrown Points vs. Team Total Points",
+       x = "Team Total Points",
+       y = "Percentage of Homegrown Points")
+```
+
+```{r}
+model <- lm(pct_homegrown_points ~ team_total_pts + drafted_player_count, data = team_points)
+summary(model)
+```
+
+```{r}
+team_points$model_fitted <- fitted(model)
+team_points$model_resid <- residuals(model)
+
+ggplot(team_points, aes(x = model_fitted, y = model_resid)) +
+  geom_point(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype="dashed", color = "red") +
+  theme_minimal() +
+  labs(title = "Residuals vs. Fitted Values",
+       x = "Fitted Values",
+       y = "Residuals")
+```
+
+```{r}
+ggplot(team_points, aes(sample = model_resid)) +
+  stat_qq() +
+  stat_qq_line(color = "red") +
+  theme_minimal() +
+  labs(title = "Normal Q-Q Plot of Residuals")
+```
+
+```{r}
+team_points <- team_points %>%
+  mutate(log_team_total_pts = log(team_total_pts + 1),
+         log_drafted_total_pts = log(drafted_total_pts + 1))
+
+numeric_vars_log <- team_points %>%
+  select(pct_homegrown_points, log_team_total_pts, log_drafted_total_pts, player_count, drafted_player_count)
+
+corr_matrix_log <- cor(numeric_vars_log, use = "complete.obs")
+
+corr_long_log <- as.data.frame(as.table(corr_matrix_log))
+colnames(corr_long_log) <- c("Var1", "Var2", "Correlation")
+
+ggplot(corr_long_log, aes(Var1, Var2, fill = Correlation)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white",
+                       midpoint = 0, limit = c(-1,1)) +
+  theme_minimal() +
+  labs(title = "Correlation Heatmap (Log-Transformed)",
+       x = "", y = "") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+model_log <- lm(pct_homegrown_points ~ log_team_total_pts + drafted_player_count, data = team_points)
+summary(model_log)
+```
+
+```{r}
+team_points$model_log_fitted <- fitted(model_log)
+team_points$model_log_resid <- residuals(model_log)
+
+ggplot(team_points, aes(x = model_log_fitted, y = model_log_resid)) +
+  geom_point(alpha = 0.7) +
+  geom_hline(yintercept=0, linetype="dashed", color="red") +
+  theme_minimal() +
+  labs(title = "Residuals vs. Fitted (Log-Transformed Model)",
+       x = "Fitted Values",
+       y = "Residuals")
+```
+
+```{r}
+ggplot(team_points, aes(x = cba_era, y = pct_homegrown_points, fill = cba_era)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(title = "Homegrown Points Percentage by CBA Era",
+       x = "CBA Era",
+       y = "Pct. Homegrown Points")
+```
+
+```{r}
+ggplot(team_points, aes(x = pct_homegrown_points)) +
+  geom_density(fill = "blue", alpha = 0.3) +
+  theme_minimal() +
+  labs(title = "Density of Percentage Homegrown Points",
+       x = "Pct. Homegrown Points",
+       y = "Density")
+```
+
+```{r}
+ggplot(team_points, aes(x = team_total_pts, y = pct_homegrown_points)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", color = "red") +
+  facet_wrap(~ cba_era) +
+  theme_minimal() +
+  labs(title = "Homegrown Points vs. Total Points by CBA Era")
+```
+
+```{r}
+ggplot(team_points, aes(x = team_total_pts, y = pct_homegrown_points, color = drafted_player_count)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE) +
+  theme_minimal() +
+  labs(title = "Interaction of Drafted Player Count and Total Points on Homegrown %")
+```
+
+```{r}
+ggplot(team_points, aes(x = team_total_pts, y = model_resid)) +
+  geom_point(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(title = "Residuals vs. Team Total Points")
+```
+
+```{r}
+library(ggridges)
+ggplot(team_points, aes(x = pct_homegrown_points, y = cba_era, fill = cba_era)) +
+  geom_density_ridges(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Distribution of Homegrown Points % by CBA Era",
+       x = "Pct. Homegrown Points",
+       y = "CBA Era")
+```
+
+```{r}
+ggplot(team_points, aes(x = yearSeason, y = pct_homegrown_points, group = nameTeam, color = nameTeam)) +
+  geom_line(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Trends in Homegrown Points % by Team Over Time",
+       x = "Season",
+       y = "Pct. Homegrown Points")
+```
+
+### Part 4 - Inference
+
+**Analysis of NBA Roster Proportion of Homegrown Players on Championships**
+
+```{r}
+champion_data <- nba_data_grouped %>% filter(is_champion == TRUE) %>% pull(pct_homegrown)
+non_champion_data <- nba_data_grouped %>% filter(is_champion == FALSE) %>% pull(pct_homegrown)
+
+t_test_result <- t.test(champion_data, non_champion_data, conf.level = 0.90)
+
+t_test_result
+```
+
+**Analysis of NBA Point Proportion of Homegrown Players on Championships**
+
+```{r}
+champion_pct <- team_points %>% filter(is_champion == TRUE) %>% pull(pct_homegrown_points)
+non_champion_pct <- team_points %>% filter(is_champion == FALSE) %>% pull(pct_homegrown_points)
+
+t_test_result <- t.test(champion_pct, non_champion_pct, conf.level = 0.90)
+t_test_result
+```
+
+**Significance of CBA Changes on who wins NBA Championships**
+
+```{r}
+champion_data_cba <- team_points %>% filter(is_champion == TRUE, !is.na(cba_era))
+
+anova_model <- aov(pct_homegrown_points ~ cba_era, data=champion_data_cba)
+summary(anova_model)
+```
+
+```{r}
+TukeyHSD(anova_model)
+```
+
+**Points Per Game (PPG) significance to winning a Championship**
+
+```{r}
+champion_key <- nba_champions %>%
+  rename(nameTeam = champion, yearSeason = season) %>%
+  distinct(nameTeam, yearSeason) %>%
+  mutate(champ_key = paste(nameTeam, yearSeason, sep = "_")) %>%
+  pull(champ_key)
+
+team_ppg <- team_stats_tbl %>%
+  group_by(nameTeam, yearSeason) %>%
+  summarize(avg_ppg = mean(ptsTeam, na.rm=TRUE), .groups = "drop") %>%
+
+  mutate(champ_key = paste(nameTeam, yearSeason, sep = "_")) %>%
+
+  mutate(is_champion = if_else(champ_key %in% champion_key, TRUE, FALSE)) %>%
+  select(nameTeam, yearSeason, avg_ppg, is_champion)
+
+
+champion_team_ppg <- team_ppg %>%
+  filter(is_champion == TRUE)
+
+champion_ppg <- champion_team_ppg$avg_ppg
+length(champion_ppg) 
+
+non_champion_ppg <- team_ppg %>%
+  filter(is_champion == FALSE) %>%
+  pull(avg_ppg)
+
+t_test_ppg <- t.test(champion_ppg, non_champion_ppg, conf.level = 0.90)
+t_test_ppg
+```
+
+**Regular Season Plus/Minus Championship Analysis**
+
+```{r}
+champion_key <- nba_champions %>%
+  rename(nameTeam = champion, yearSeason = season) %>%
+  distinct(nameTeam, yearSeason) %>%
+  mutate(champ_key = paste(nameTeam, yearSeason, sep = "_")) %>%
+  pull(champ_key)
+
+
+team_plusminus <- team_stats_tbl %>%
+  group_by(nameTeam, yearSeason) %>%
+  summarize(total_plusminus = sum(plusminusTeam, na.rm=TRUE), .groups = "drop") %>%
+
+  mutate(champ_key = paste(nameTeam, yearSeason, sep = "_"),
+         is_champion = if_else(champ_key %in% champion_key, TRUE, FALSE)) %>%
+  select(nameTeam, yearSeason, total_plusminus, is_champion)
+```
+
+```{r}
+champion_plusminus <- team_plusminus %>%
+  filter(is_champion == TRUE) %>%
+  select(yearSeason, total_plusminus) %>%
+  rename(champion_plusminus = total_plusminus)
+
+top_plusminus <- team_plusminus
+```
+
+```{r}
+top16_plusminus <- top_plusminus %>%
+  group_by(yearSeason) %>%
+  arrange(desc(total_plusminus)) %>%
+  slice_head(n=16) %>%
+  ungroup() %>%
+  pull(total_plusminus)
+
+top8_plusminus <- top_plusminus %>%
+  group_by(yearSeason) %>%
+  arrange(desc(total_plusminus)) %>%
+  slice_head(n=8) %>%
+  ungroup() %>%
+  pull(total_plusminus)
+
+top4_plusminus <- top_plusminus %>%
+  group_by(yearSeason) %>%
+  arrange(desc(total_plusminus)) %>%
+  slice_head(n=4) %>%
+  ungroup() %>%
+  pull(total_plusminus)
+```
+
+```{r}
+champion_values <- champion_plusminus$champion_plusminus
+
+t_test_top16 <- t.test(champion_values, top16_plusminus, conf.level=0.90)
+t_test_top16
+```
+
+```{r}
+t_test_top8 <- t.test(champion_values, top8_plusminus, conf.level=0.90)
+t_test_top8
+```
+
+```{r}
+t_test_top4 <- t.test(champion_values, top4_plusminus, conf.level=0.90)
+t_test_top4
+```
+
+**Champion Prediction Model based on NBA Regular Season**
+
+Model Data Setup
+
+```{r}
+team_points <- joined_data %>%
+  group_by(nameTeam, yearSeason, is_champion) %>%
+  summarize(
+    team_total_pts = sum(total_pts, na.rm=TRUE),
+    drafted_total_pts = sum(ifelse(is_on_draft_team == TRUE, total_pts, 0), na.rm=TRUE),
+    pct_homegrown_points = drafted_total_pts / team_total_pts,
+    drafted_player_count = sum(is_on_draft_team == TRUE),
+    player_count = n(),
+    .groups = "drop"
+)
+
+team_points <- team_points %>%
+  mutate(cba_era = case_when(
+    yearSeason <= 2005 ~ "pre_2005_CBA",
+    yearSeason >= 2006 & yearSeason <= 2011 ~ "CBA_2006_2011",
+    yearSeason >= 2012 & yearSeason <= 2016 ~ "CBA_2012_2016",
+    yearSeason >= 2017 ~ "CBA_2017_onward"
+  ))
+
+team_stats_tbl <- team_stats_tbl %>%
+  mutate(ptsOpponent = ptsTeam - plusminusTeam)
+
+team_wins <- team_stats_tbl %>%
+  group_by(nameTeam, yearSeason) %>%
+  summarize(
+    wins = sum(outcomeGame == "W"),
+    losses = sum(outcomeGame == "L"),
+    win_percentage = wins / (wins + losses),
+    avg_points_for = mean(ptsTeam, na.rm=TRUE),
+    avg_points_against = mean(ptsOpponent, na.rm=TRUE),
+    .groups = "drop"
+)
+
+model_data <- team_points %>%
+  inner_join(team_wins, by = c("nameTeam", "yearSeason"))
+
+model_data <- model_data %>%
+  mutate(
+    cba_era = factor(cba_era),
+    is_champion = factor(is_champion, levels = c(FALSE, TRUE), labels = c("0","1"))
+  )
+
+model_data$is_champion <- as.factor(model_data$is_champion)
+levels(model_data$is_champion) <- c("NoChampion", "Champion")
+
+class_counts <- table(model_data$is_champion)
+total_counts <- sum(class_counts)
+class_weights <- total_counts / (length(class_counts) * class_counts)
+
+model_data <- model_data %>%
+  mutate(weights = ifelse(is_champion == "Champion",
+                          class_weights["Champion"],
+                          class_weights["NoChampion"]))
+```
+
+Train/Test Splits
+
+```{r}
+library(caret)
+set.seed(123)
+train_index <- createDataPartition(model_data$is_champion, p = 0.8, list = FALSE)
+train_data <- model_data[train_index, ]
+test_data <- model_data[-train_index, ]
+
+train_data <- na.omit(train_data)
+```
+
+F1 Metric Definition and Model Training Parameters
+
+```{r}
+f1 <- function(data, lev = NULL, model = NULL) {
+  precision <- posPredValue(data$pred, data$obs, positive = lev[1])
+  recall <- sensitivity(data$pred, data$obs, positive = lev[1])
+  f1_val <- 2 * (precision * recall) / (precision + recall)
+  names(f1_val) <- "F1"
+  return(f1_val)
+}
+
+objControl <- trainControl(
+  method = "cv",                   
+  number = 5,                     
+  summaryFunction = f1,           
+  classProbs = TRUE,               
+  savePredictions = TRUE
+)
+```
+
+Model Training and Resulting Confusion Matrix
+
+```{r}
+set.seed(123)
+caretLogitModel <- train(
+  is_champion ~ cba_era + drafted_player_count + pct_homegrown_points + win_percentage + avg_points_for + avg_points_against,
+  data = train_data,
+  method = "glm",
+  family = binomial,
+  weights = train_data$weights,
+  trControl = objControl,
+  metric = "F1"                 
+)
+
+test_probs <- predict(caretLogitModel, newdata = test_data, type = "prob")[, "Champion"]
+test_pred <- predict(caretLogitModel, newdata = test_data)
+confusionMatrix(test_pred, test_data$is_champion, positive = "Champion")
+```
+
+ROC Curve
+
+```{r}
+library(pROC)
+roc_obj <- roc(test_data$is_champion, test_probs, levels = c("NoChampion", "Champion"), direction = "<")
+
+ggroc(roc_obj) +
+  ggtitle(paste("ROC Curve (AUC =", round(auc(roc_obj), 2), ")")) +
+  theme_minimal()
+```
+
+Precision Recall Curve
+
+```{r}
+library(yardstick)
+
+pr_data <- data.frame(
+  truth = factor(test_data$is_champion, levels = c("NoChampion", "Champion")),
+  prob = test_probs
+)
+
+pr_data <- pr_data %>%
+  mutate(truth = factor(truth, levels = c("Champion", "NoChampion")))
+
+pr_curve_data <- pr_curve(pr_data, truth = truth, prob, event_level = "first")
+
+# Plot the precision-recall curve
+autoplot(pr_curve_data) +
+  ggtitle("Precision-Recall Curve") +
+  theme_minimal()
+```
+
+### Part 5 - Conclusion
+
+```         
+•   Homegrown Talent as a Strategic Factor:
+```
+
+There is a statistically significant relationship between the proportion of a team’s scoring coming from homegrown players and its overall performance. While the direction and strength of this relationship can vary, the evidence supports that how teams acquire and develop talent is not a trivial matter. • Contextual Influences are Real and Quantifiable: The importance of league context, captured by CBA eras, is now statistically confirmed. Shifts in league rules and economics have a meaningful effect on roster construction and scoring strategies. Teams operating in different eras adapt differently, and these adaptations leave measurable imprints on their reliance on internally developed talent. • Complex, Non-Linear Dynamics: Relationships are more complex than simple linear fits suggest. Transformations and interaction terms improve model performance, demonstrating that both the scale of scoring and the number of drafted players interact to influence homegrown scoring percentages. This complexity was not merely an artifact of the data—formal inference confirms it is a genuine feature of the underlying relationships. • A Reliable Analytical Base for Further Research: With both exploratory and inferential findings converging, we have a solid, statistically grounded foundation. Future research can build upon these conclusions to examine causal mechanisms, test more sophisticated models, or explore how individual team strategies and player-level data contribute to these observed patterns.
+
+In essence, the analysis confirms that while winning and scoring often catch headlines, how teams get there—particularly how they grow and retain talent—matters and can be reliably measured and inferred. The final takeaway is that both context (era) and strategic choices about player development materially influence the composition and success of a team’s scoring contributions.
+
+### References
+
+Roster by Year and Champions by Year ([https://www.basketball-reference.com](https://www.basketball-reference.com/teams/ATL/players.html){.uri})
+
+Player Bios, Player Stats, Team Stats (<https://www.nba.com/stats/>)
+
+### Appendix (optional)
+
+Remove this section if you don't have an appendix

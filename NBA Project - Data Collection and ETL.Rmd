@@ -1,0 +1,325 @@
+---
+title: DATA 606 Data Project Proposal
+author: Marc Fridson
+---
+
+### Data Preparation
+
+Collection of NBA Team Stats
+
+```{r}
+library(nbastatR)
+library(readr)
+library(tibble)
+
+seasons <- 2001:2024
+
+team_stats <- game_logs(seasons = seasons, result_types = "team")
+
+team_stats_tbl <- as_tibble(team_stats)
+write_csv(team_stats_tbl, "team_stats.csv")
+```
+
+Collection of NBA Player Stats
+
+```{r}
+Sys.setenv("VROOM_CONNECTION_SIZE" = 131072 * 2)
+
+player_stats <- game_logs(seasons = seasons, result_types = "player")
+
+player_stats_tbl <- as_tibble(player_stats)
+write_csv(player_stats_tbl, "player_stats.csv")
+```
+
+Create a table of NBA Champions between 2001 and 2024
+
+```{r}
+library(tibble)
+
+nba_champions <- tibble::tibble(
+  season = 2001:2024,
+  champion = c(
+    "Los Angeles Lakers",
+    "Los Angeles Lakers",
+    "San Antonio Spurs",
+    "Detroit Pistons",
+    "San Antonio Spurs",
+    "Miami Heat",
+    "San Antonio Spurs",
+    "Boston Celtics",
+    "Los Angeles Lakers",
+    "Los Angeles Lakers",
+    "Dallas Mavericks",
+    "Miami Heat",
+    "Miami Heat",
+    "San Antonio Spurs",
+    "Golden State Warriors",
+    "Cleveland Cavaliers",
+    "Golden State Warriors",
+    "Golden State Warriors",
+    "Toronto Raptors",
+    "Los Angeles Lakers",
+    "Milwaukee Bucks",
+    "Golden State Warriors",
+    "Denver Nuggets",
+    "Boston Celtics"
+  )
+)
+
+write_csv(nba_champions, "nba_champions.csv")
+```
+
+NBA Team Rosters 2001-2024
+
+```{r}
+library(rvest)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(readr)
+
+# Function to scrape player data for a given team and season
+scrape_team_roster <- function(team_abbr, season) {
+  # Construct the URL for the team's roster page for the given season
+  url <- paste0("https://www.basketball-reference.com/teams/", team_abbr, "/", season, ".html")
+  
+  # Read the HTML content of the page
+  page <- read_html(url)
+  
+  # Extract the roster table
+  roster_table <- page %>%
+    html_node(xpath = '//*[@id="roster"]') %>%
+    html_table()
+  
+  # Standardize all columns to character type
+  roster_table <- roster_table %>%
+    mutate(across(everything(), as.character))
+  
+  # Add team abbreviation and season to the data
+  roster_table <- roster_table %>%
+    mutate(Team = team_abbr, Season = season)
+  
+  return(roster_table)
+}
+
+# List of team abbreviations (as used in Basketball-Reference URLs)
+team_abbrs <- c("ATL", "BOS","NJN", "BRK", "CHA","CHO","NOH", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+                "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+                "OKC", "ORL", "PHI", "PHO", "POR", "SAC", "SAS", "TOR", "UTA", "WAS")
+
+# List of seasons (2000-01 to 2023-24)
+seasons <- 2001:2024
+
+# Scrape rosters for all teams and seasons
+all_rosters <- map_dfr(team_abbrs, function(team) {
+  map_dfr(seasons, function(season) {
+    # Randomized pause between 5 to 10 seconds
+    Sys.sleep(runif(1, min = 1, max = 5))
+    tryCatch({
+      scrape_team_roster(team, season)
+    }, error = function(e) {
+      message(paste("Error scraping", team, season, ":", e$message))
+      return(NULL)
+    })
+  })
+})
+
+write_csv(all_rosters, "all_nba_rosters.csv")
+```
+
+NBA Team Rosters 1979-2000
+
+```{r}
+library(rvest)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(readr)
+
+# Function to scrape player data for a given team and season
+scrape_team_roster <- function(team_abbr, season) {
+  # Construct the URL for the team's roster page for the given season
+  url <- paste0("https://www.basketball-reference.com/teams/", team_abbr, "/", season, ".html")
+  
+  # Read the HTML content of the page
+  page <- read_html(url)
+  
+  # Extract the roster table
+  roster_table <- page %>%
+    html_node(xpath = '//*[@id="roster"]') %>%
+    html_table()
+  
+  # Standardize all columns to character type
+  roster_table <- roster_table %>%
+    mutate(across(everything(), as.character))
+  
+  # Add team abbreviation and season to the data
+  roster_table <- roster_table %>%
+    mutate(Team = team_abbr, Season = season)
+  
+  return(roster_table)
+}
+
+# List of team abbreviations (as used in Basketball-Reference URLs)
+team_abbrs <- c("ATL", "BOS","NJN", "BRK", "CHA","CHO","NOH", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+                "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+                "OKC", "ORL", "PHI", "PHO", "POR", "SAC", "SAS", "TOR", "UTA", "WAS")
+
+# List of seasons (2000-01 to 2023-24)
+seasons <- 1979:2000
+
+# Scrape rosters for all teams and seasons
+historical_rosters <- map_dfr(team_abbrs, function(team) {
+  map_dfr(seasons, function(season) {
+    # Randomized pause between 5 to 10 seconds
+    Sys.sleep(runif(1, min = 1, max = 5))
+    tryCatch({
+      scrape_team_roster(team, season)
+    }, error = function(e) {
+      message(paste("Error scraping", team, season, ":", e$message))
+      return(NULL)
+    })
+  })
+})
+
+write_csv(historical_rosters, "historical_rosters.csv")
+```
+
+Reload scraped data from CSVs and Union NBA Team Rosters 2001-2024 with 1979-2000
+
+```{r}
+library(rvest)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(readr)
+library(dplyr)
+library(tibble)
+
+all_nba_rosters <- read.csv("all_nba_rosters.csv")
+historical_rosters <- read.csv("historical_rosters.csv")
+player_stats_tbl <- read.csv("player_stats.csv")
+team_stats_tbl <- read.csv("team_stats.csv")
+nba_champions <- read.csv("nba_champions.csv")
+
+
+all_nba_rosters <- all_nba_rosters %>%
+  union_all(historical_rosters)
+
+draft_team <- all_nba_rosters %>%
+  filter(Exp == "R")
+```
+
+Combine draft, roster and championship information
+
+```{r}
+
+team_mapping <- data.frame(
+  abbreviation = c("ATL", "BOS", "BKN", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+                   "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+                   "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS"),
+  full_name = c("Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets", "Chicago Bulls", "Cleveland Cavaliers", 
+                "Dallas Mavericks", "Denver Nuggets", "Detroit Pistons", "Golden State Warriors",
+                "Houston Rockets", "Indiana Pacers", "Los Angeles Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat", 
+                "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans", "New York Knicks",
+                "Oklahoma City Thunder", "Orlando Magic", "Philadelphia 76ers", "Phoenix Suns", "Portland Trail Blazers", 
+                "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors", "Utah Jazz", "Washington Wizards")
+)
+
+all_nba_rosters <- all_nba_rosters %>%
+  filter(Season >= 2001)%>%
+  left_join(team_mapping, by = c("Team" = "abbreviation"))
+
+nba_data <- all_nba_rosters %>%
+  mutate(is_on_draft_team = if_else(
+    mapply(function(Player, Birth.Date, Team) any(
+      draft_team$Player == Player & draft_team$Birth.Date == Birth.Date & draft_team$Team == Team
+    ), Player, Birth.Date, Team),
+    TRUE, FALSE
+  ))
+
+nba_data <- nba_data %>%
+  mutate(is_champion = if_else(
+    mapply(function(full_name, Season) any(nba_champions$champion == full_name & nba_champions$season == Season),full_name, Season),TRUE, FALSE))
+
+write_csv(nba_data, "nba_data.csv")
+
+nba_data
+```
+
+### Research question
+
+Do NBA teams that win a championship have a statistically higher or lower percentage of regular-season points scored by players they originally drafted compared to teams that do not win championships?
+
+Additionally, when a new Collective Bargaining Agreement(CBA) has been signed in the NBA, has this significantly shifted the proportion of players on the roster drafted by that team and proportion of points scored on championship teams by players drafted by that team in that season. The intention of each CBA has been to create league parity and for players to be incentivized to stay with the teams that drafted them.
+
+Have the CBAs cumulatively had an effect on the percentage of points scored by drafted players on championship teams? Which CBA had the most significant effect on the percentage of points scored by drafted players on championship teams?
+
+### Cases
+
+**What are the cases, and how many are there?**
+
+We have 24 nba champions (total cases). Those 24 champions are divided into 4 time periods (2001-2005, 2005-2011, 2011-2016, 2016-2023).
+
+### Data collection
+
+**Describe the method of data collection.**
+
+Roster by Year and Champions by Year ([https://www.basketball-reference.com](https://www.basketball-reference.com/teams/ATL/players.html){.uri})
+
+Player Bios, Player Stats, Team Stats (<https://www.nba.com/stats/>)
+
+### Type of study
+
+**What type of study is this (observational/experiment)?**
+
+This is an observational study.
+
+### Data Source
+
+-   **Basketball-Reference.com**: <https://www.basketball-reference.com/>
+
+-   **NBA Official Website**: <https://www.nba.com/stats/>
+
+### Response
+
+**What is the response variable, and what type is it (numerical/categorical)?**
+
+The response variable is the **percentage of total team points scored by homegrown players** during the regular season. It is **numerical**.
+
+### Explanatory
+
+**What is the explanatory variable, and what type is it (numerical/categorical)?**
+
+The explanatory variable is whether the team **won the championship** in that season. It is **categorical** (1 = Champion, 0 = Non-Champion).
+
+### Relevant summary statistics
+
+Aggregate data at the team level
+
+```{r}
+nba_data_grouped <- nba_data %>%
+  group_by(full_name, Season, is_champion) %>%
+  summarize(
+    player_count = n(),
+    draft_team_count = sum(is_on_draft_team == TRUE),
+    pct_homegrown = draft_team_count / player_count
+  )
+
+nba_data_grouped
+```
+
+Perform Hypothesis with 90% Confidence Level
+
+```{r}
+# Filter the data for champion and non-champion groups
+champion_data <- nba_data_grouped %>% filter(is_champion == TRUE) %>% pull(pct_homegrown)
+non_champion_data <- nba_data_grouped %>% filter(is_champion == FALSE) %>% pull(pct_homegrown)
+
+# Perform a two-sample t-test with a 90% confidence level
+t_test_result <- t.test(champion_data, non_champion_data, conf.level = 0.90)
+
+t_test_result
+```
+
+Simply looking at the % of drafted players on championship teams versus non-championship teams is not significantly different. The final project will focus more on the % of points scored by drafted players to essentially use points as a weighted average for the weighted average drafted players contribute to their teams.
